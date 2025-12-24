@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magical Particle Christmas Tree</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #020205;
+            font-family: 'Times New Roman', serif;
+            touch-action: none;
+            cursor: grab; 
+        }
+
+        body:active {
+            cursor: grabbing;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #overlay {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+            
+            font-size: 2.5rem; 
+            letter-spacing: 0.3em;
+            text-transform: uppercase;
+            font-weight: bold; 
+            
+            background: linear-gradient(
+                90deg, 
+                rgba(255, 230, 200, 0.3) 0%, 
+                rgba(255, 230, 200, 0.3) 40%, 
+                rgba(255, 255, 255, 1) 50%, 
+                rgba(255, 230, 200, 0.3) 60%, 
+                rgba(255, 230, 200, 0.3) 100%
+            );
+            background-size: 200% auto;
+            color: rgba(255, 230, 200, 0.3); 
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent; 
+            
+            animation: shine 3s linear infinite; 
+            text-shadow: 0 0 10px rgba(255, 200, 50, 0.2);
+        }
+
+        @keyframes shine {
+            to {
+                background-position: 200% center;
+            }
+        }
+        
+        #instruction {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.3);
+            font-family: sans-serif;
+            font-size: 0.8rem;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="instruction">Drag to rotate • Click Top to change Shape • Click Tree to change Color</div>
+    <div id="overlay">Merry Christmas</div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        /**
+         * ARTISTIC SPIRAL TREE - SHAPE SHIFTING TOPPER
+         * - Lowered Tree Position
+         * - Click Topper -> Morph between Star and Heart
+         * - 40K Particles Performance
+         */
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+
+        let width, height;
+        let particles = [];
+        let snowParticles = [];
+        let topperParticles = [];
+        let ornamentParticles = []; 
+        let time = 0;
+        
+        let treeRotation = 0;       
+        let isDragging = false;
+        let startX = 0;
+        let lastX = 0;
+        let rotationVelocity = 0;   
+
+        // Cấu hình nâng cao
+        const SETTINGS = {
+            particleCount: 40000, 
+            snowCount: 150,
+            topperCount: 400, // Tăng nhẹ số hạt đỉnh để hình trái tim rõ hơn
+            ornamentCount: 50,
+            treeRadius: 260,    
+            treeHeight: 500,    
+            spinSpeed: 0.0015, 
+            focalLength: 500,
+            yOffset: -30, // HẠ THẤP CÂY (Cũ -100 -> -30)
+            branches: 9,        
+            tiers: 10, 
+            colors: {
+                primaryH: 45,   
+                secondaryH: 190,
+                gold: 45,
+                red: 350,
+                pink: 330 // Màu hồng cho trái tim
+            }
+        };
+
+        let currentBaseHue = 190; 
+        
+        // TRẠNG THÁI TOPPER (0: STAR, 1: HEART)
+        let topperState = 0; 
+
+        // --- TƯƠNG TÁC ---
+        function handleStart(x) { isDragging = true; startX = x; lastX = x; rotationVelocity = 0; }
+        function handleMove(x) {
+            if (!isDragging) return;
+            const delta = x - lastX;
+            treeRotation += delta * 0.005; 
+            rotationVelocity = delta * 0.005; 
+            lastX = x;
+        }
+        function handleEnd() { isDragging = false; }
+
+        canvas.addEventListener('mousedown', e => handleStart(e.clientX));
+        window.addEventListener('mousemove', e => handleMove(e.clientX));
+        window.addEventListener('mouseup', handleEnd);
+        canvas.addEventListener('touchstart', e => handleStart(e.touches[0].clientX), {passive: false});
+        window.addEventListener('touchmove', e => handleMove(e.touches[0].clientX), {passive: false});
+        window.addEventListener('touchend', handleEnd);
+
+        // --- XỬ LÝ CLICK THÔNG MINH ---
+        canvas.addEventListener('click', (e) => {
+            if (Math.abs(e.clientX - startX) > 5) return; // Nếu đang kéo thì không tính click
+
+            // Tính vị trí 2D hiện tại của đỉnh cây để check click
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const topperScale = SETTINGS.focalLength / (SETTINGS.focalLength); // z=0 tại tâm xoay
+            
+            // Tọa độ đỉnh cây trên màn hình
+            const topperScreenX = centerX;
+            const topperScreenY = (-SETTINGS.treeHeight / 2 - 35 + SETTINGS.yOffset) * topperScale + centerY;
+
+            // Tính khoảng cách click tới đỉnh
+            const dx = e.clientX - topperScreenX;
+            const dy = e.clientY - topperScreenY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+
+            if (dist < 60) {
+                // CLICK VÀO ĐỈNH -> Đổi hình dạng (Star <-> Heart)
+                toggleTopperShape();
+            } else {
+                // CLICK VÀO CÂY -> Đổi màu cây
+                changeTreeColor();
+            }
+        });
+
+        function toggleTopperShape() {
+            topperState = (topperState + 1) % 2; // 0 -> 1 -> 0
+            
+            // Cập nhật lại tất cả hạt topper
+            topperParticles.forEach(p => {
+                p.morphTopper(topperState);
+            });
+        }
+
+        function changeTreeColor() {
+            currentBaseHue = (currentBaseHue + 60 + Math.random() * 60) % 360;
+            const newSecondaryHue = (currentBaseHue + 145) % 360; 
+
+            particles.forEach(p => {
+                if (p.isHighlight) {
+                     p.hue = currentBaseHue + (Math.random() * 10);
+                } else {
+                    const distRatio = p.radius / SETTINGS.treeRadius;
+                    let newHue = currentBaseHue + (distRatio * 100);
+                    if (distRatio > 0.6) {
+                        p.hue = newSecondaryHue + (Math.random() * 30);
+                    } else {
+                        p.hue = newHue;
+                    }
+                }
+            });
+        }
+
+        function resize() {
+            const dpr = Math.min(window.devicePixelRatio || 1, 2); 
+            
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+            
+            ctx.scale(dpr, dpr);
+
+            if (height < 700) {
+                SETTINGS.treeRadius = 160;
+                SETTINGS.treeHeight = 320;
+                SETTINGS.focalLength = 350;
+                SETTINGS.yOffset = 0; 
+                SETTINGS.tiers = 8;
+            }
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius) {
+            let rot = Math.PI / 2 * 3;
+            let x = cx;
+            let y = cy;
+            let step = Math.PI / spikes;
+
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - outerRadius);
+            for (let i = 0; i < spikes; i++) {
+                x = cx + Math.cos(rot) * outerRadius;
+                y = cy + Math.sin(rot) * outerRadius;
+                ctx.lineTo(x, y);
+                rot += step;
+                x = cx + Math.cos(rot) * innerRadius;
+                y = cy + Math.sin(rot) * innerRadius;
+                ctx.lineTo(x, y);
+                rot += step;
+            }
+            ctx.lineTo(cx, cy - outerRadius);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        class Particle {
+            constructor(type, options = {}) {
+                this.type = type;
+                this.init(options);
+            }
+
+            init(options) {
+                this.x = 0; this.y = 0; this.z = 0;
+                this.size = 1;
+                this.alpha = 1;
+                this.baseAngle = 0; 
+                this.orbitRadius = 0;
+
+                if (this.type === 'tree' || this.type === 'ornament') {
+                    // ... (Giữ nguyên logic cây) ...
+                    let pct;
+                    if (this.type === 'ornament') {
+                        const minPct = 0.2; const maxPct = 0.88; 
+                        pct = minPct + Math.pow(Math.random(), 0.8) * (maxPct - minPct);
+                        pct = (Math.floor(pct * SETTINGS.tiers) + 0.9) / SETTINGS.tiers;
+                    } else {
+                        pct = Math.pow(Math.random(), 0.8);
+                    }
+
+                    this.y = (pct * SETTINGS.treeHeight) - (SETTINGS.treeHeight / 2);
+                    
+                    const maxGlobalR = SETTINGS.treeRadius * Math.pow(pct, 1.1);
+                    const tierFactor = 0.4 + 0.6 * Math.pow((pct * SETTINGS.tiers) % 1, 0.8);
+                    const maxLocalR = maxGlobalR * tierFactor;
+                    
+                    const branchAngle = (options.index % SETTINGS.branches) * ((Math.PI * 2) / SETTINGS.branches);
+                    const spiralTwist = pct * Math.PI * 8; 
+                    
+                    this.baseAngle = branchAngle + spiralTwist + (Math.random() - 0.5) * 0.5;
+                    
+                    if (this.type === 'ornament') {
+                         this.radius = maxLocalR * 0.9; 
+                         this.y += 5; 
+                    } else {
+                        this.radius = maxLocalR * Math.sqrt(Math.random()); 
+                    }
+                    
+                    this.orbitRadius = this.radius; 
+
+                    if (this.type === 'ornament') {
+                        this.baseSize = 4 + Math.random() * 3; 
+                        this.shapeType = Math.random() > 0.5 ? 1 : 0; 
+
+                        if (this.shapeType === 0) { // SAO -> VÀNG
+                            this.hue = SETTINGS.colors.gold; 
+                            this.sat = 100; 
+                            this.light = 60; 
+                        } else { // QUẢ CHÂU -> ĐỎ
+                            this.hue = SETTINGS.colors.red; 
+                            this.sat = 100; 
+                            this.light = 50; 
+                        }
+                    } else {
+                        const distRatio = this.radius / SETTINGS.treeRadius;
+                        if (Math.random() > 0.7) {
+                            this.isHighlight = true;
+                            this.hue = currentBaseHue + (Math.random() * 10);
+                            this.sat = 90;
+                            this.light = 80;
+                            this.baseSize = 0.5 + Math.random() * 0.7; 
+                        } else {
+                            this.isHighlight = false;
+                            this.hue = currentBaseHue + (distRatio * 100); 
+                            if (this.hue > currentBaseHue + 60) this.hue = SETTINGS.colors.secondaryH + (Math.random() * 30);
+                            this.sat = 70;
+                            this.light = 40 + (1 - pct) * 40; 
+                            this.baseSize = 0.2 + Math.random() * 0.4; 
+                        }
+                    }
+
+                } else if (this.type === 'snow') {
+                    this.x = (Math.random() - 0.5) * width * 2;
+                    this.y = -height + Math.random() * height * 2;
+                    this.z = (Math.random() - 0.5) * 1000;
+                    this.vy = 0.5 + Math.random() * 1.5;
+                    this.baseSize = 0.5 + Math.random() * 2;
+                    this.hue = 220; this.sat = 20; this.light = 90;
+
+                } else if (this.type === 'topper') {
+                    // Khởi tạo ban đầu là Star (State 0)
+                    this.morphTopper(0);
+                }
+            }
+
+            // HÀM BIẾN HÌNH TOPPER
+            morphTopper(state) {
+                // Center Y cho topper
+                const centerY = -SETTINGS.treeHeight/2 - 35;
+                
+                if (state === 0) {
+                    // --- STAR SHAPE (SPHERE CLOUD) ---
+                    const r = Math.random() * 30; 
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.random() * Math.PI;
+                    
+                    const lx = r * Math.sin(phi) * Math.cos(theta);
+                    const lz = r * Math.cos(phi);
+                    const ly = r * Math.sin(phi) * Math.sin(theta);
+
+                    this.y = centerY + ly;
+                    this.orbitRadius = Math.hypot(lx, lz);
+                    this.baseAngle = Math.atan2(lz, lx);
+
+                    this.hue = SETTINGS.colors.gold; 
+                    this.sat = 100; this.light = 85;
+                    this.baseSize = 3 + Math.random() * 3;
+
+                } else if (state === 1) {
+                    // --- HEART SHAPE (3D FORMULA) ---
+                    // Công thức trái tim 3D
+                    // x = 16sin^3(t)
+                    // y = 13cos(t) - 5cos(2t) - 2cos(3t) - cos(4t)
+                    
+                    // Random t để rải hạt dọc đường cong
+                    const t = Math.random() * Math.PI * 2;
+                    
+                    // Random thickness để tạo độ dày 3D
+                    const thickness = (Math.random() - 0.5) * 15; 
+                    
+                    // Scale cho phù hợp
+                    const scale = 2.0; 
+
+                    const lx = scale * 16 * Math.pow(Math.sin(t), 3);
+                    // Đảo ngược Y vì canvas Y dương hướng xuống
+                    const ly = -scale * (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
+                    const lz = thickness;
+
+                    // Thêm chút nhiễu để không quá cứng
+                    const jitter = 2;
+
+                    this.y = centerY + ly + (Math.random() - 0.5) * jitter;
+                    
+                    // Do tim dẹt, ta xoay lx, lz để nó luôn hướng mặt về phía người xem ban đầu,
+                    // nhưng khi xoay cây thì nó xoay theo.
+                    // Ở đây ta gán trực tiếp vào orbitRadius/baseAngle để nó xoay cùng cây.
+                    this.orbitRadius = Math.hypot(lx, lz);
+                    this.baseAngle = Math.atan2(lz, lx);
+
+                    this.hue = SETTINGS.colors.pink; 
+                    this.sat = 100; this.light = 75;
+                    this.baseSize = 3 + Math.random() * 3;
+                }
+            }
+
+            update() {
+                if (this.type === 'snow') {
+                    this.y += this.vy;
+                    if (this.y > height/2 + 100) {
+                        this.y = -height/2 - 100;
+                        this.x = (Math.random() - 0.5) * width * 2;
+                    }
+                    return;
+                }
+
+                let effectiveAngle = this.baseAngle + treeRotation;
+                
+                this.x = Math.cos(effectiveAngle) * this.orbitRadius;
+                this.z = Math.sin(effectiveAngle) * this.orbitRadius;
+
+                if (this.type === 'tree') {
+                    const breath = 1 + Math.sin(time * 0.001) * 0.01;
+                    this.alpha = 0.9 * (this.y < -SETTINGS.treeHeight/2 + 50 ? 1 : 0.85); 
+                    this.size = this.baseSize * breath; 
+                } 
+                else if (this.type === 'ornament') { this.alpha = 1.0; this.size = this.baseSize; }
+                else if (this.type === 'topper') { this.alpha = 0.95; }
+            }
+
+            draw(ctx, centerX, centerY) {
+                const scale = SETTINGS.focalLength / (SETTINGS.focalLength + this.z);
+                if (scale < 0.1) return;
+
+                const x2d = this.x * scale + centerX;
+                const y2d = (this.y + SETTINGS.yOffset) * scale + centerY;
+                const size2d = this.size * scale;
+                
+                if (size2d < 0.1) return;
+                
+                const depthAlpha = this.alpha * (scale > 1 ? 1 : scale);
+
+                ctx.fillStyle = `hsla(${this.hue}, ${this.sat}%, ${this.light}%, ${depthAlpha})`;
+                
+                if (this.type === 'ornament') {
+                    if (this.shapeType === 0) { // SAO
+                        drawStar(ctx, x2d, y2d, 5, size2d, size2d * 0.45);
+                        ctx.fillStyle = `hsla(45, 100%, 90%, ${depthAlpha})`; 
+                        ctx.beginPath(); ctx.arc(x2d, y2d, size2d * 0.2, 0, Math.PI * 2); ctx.fill();
+                    } 
+                    else { // CHÂU
+                        ctx.beginPath(); ctx.arc(x2d, y2d, size2d, 0, Math.PI * 2); ctx.fill();
+                        ctx.fillStyle = `hsla(0, 0%, 100%, ${depthAlpha * 0.6})`;
+                        ctx.beginPath(); ctx.arc(x2d - size2d * 0.3, y2d - size2d * 0.3, size2d * 0.25, 0, Math.PI * 2); ctx.fill();
+                    } 
+                } else {
+                    if (size2d < 2) {
+                        ctx.fillRect(x2d - size2d/2, y2d - size2d/2, size2d, size2d);
+                    } else {
+                        ctx.beginPath();
+                        ctx.arc(x2d, y2d, size2d, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+
+        function init() {
+            particles = []; snowParticles = []; topperParticles = []; ornamentParticles = [];
+            for (let i = 0; i < SETTINGS.particleCount; i++) particles.push(new Particle('tree', { index: i }));
+            for (let i = 0; i < SETTINGS.ornamentCount; i++) ornamentParticles.push(new Particle('ornament', { index: i }));
+            for (let i = 0; i < SETTINGS.snowCount; i++) snowParticles.push(new Particle('snow'));
+            for (let i = 0; i < SETTINGS.topperCount; i++) topperParticles.push(new Particle('topper'));
+        }
+
+        function drawBase(centerX, centerY) {
+            const yPos = (SETTINGS.treeHeight / 2 + SETTINGS.yOffset);
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.scale(1, 0.25); 
+
+            for (let i = 0; i < 3; i++) {
+                const wave = (time * 0.05 + i * 20) % 100; 
+                const radius = SETTINGS.treeRadius * 0.6 + wave * 2;
+                const opacity = (1 - wave / 100) * 0.3;
+                
+                ctx.beginPath();
+                ctx.arc(0, yPos * 4, radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `hsla(${SETTINGS.colors.gold}, 100%, 70%, ${opacity})`; 
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            time += 1;
+            
+            if (!isDragging) {
+                treeRotation += SETTINGS.spinSpeed;
+                treeRotation += rotationVelocity;
+                rotationVelocity *= 0.95; 
+            }
+
+            ctx.fillStyle = '#020205';
+            ctx.fillRect(0, 0, width, height); 
+
+            const centerX = width / 2;
+            const centerY = height / 2;
+
+            snowParticles.forEach(p => { if (p.z > 0) { p.update(); p.draw(ctx, centerX, centerY); }});
+
+            ctx.globalCompositeOperation = 'lighter';
+            drawBase(centerX, centerY);
+
+            // Vẽ hạt cây (Không sort)
+            particles.forEach(p => {
+                p.update();
+                p.draw(ctx, centerX, centerY);
+            });
+
+            // Vẽ đồ trang trí (Sort)
+            ornamentParticles.sort((a, b) => b.z - a.z);
+            ornamentParticles.forEach(p => {
+                p.update();
+                p.draw(ctx, centerX, centerY);
+            });
+
+            // --- VẼ GLOW ĐỈNH ---
+            const topperScale = SETTINGS.focalLength / (SETTINGS.focalLength); 
+            const tx = centerX;
+            const ty = (-SETTINGS.treeHeight / 2 - 35 + SETTINGS.yOffset) * topperScale + centerY;
+            
+            // Màu Glow phụ thuộc vào trạng thái
+            let glowHue = (topperState === 0) ? SETTINGS.colors.gold : SETTINGS.colors.pink;
+            
+            const g1 = ctx.createRadialGradient(tx, ty, 0, tx, ty, 140); 
+            g1.addColorStop(0, `hsla(${glowHue}, 100%, 70%, 0.4)`);
+            g1.addColorStop(1, `hsla(${glowHue}, 100%, 70%, 0)`);
+            ctx.fillStyle = g1;
+            ctx.beginPath(); ctx.arc(tx, ty, 140, 0, Math.PI*2); ctx.fill();
+
+            const g2 = ctx.createRadialGradient(tx, ty, 0, tx, ty, 50); 
+            g2.addColorStop(0, `hsla(${glowHue}, 100%, 90%, 1)`);
+            g2.addColorStop(1, `hsla(${glowHue}, 100%, 90%, 0)`);
+            ctx.fillStyle = g2;
+            ctx.beginPath(); ctx.arc(tx, ty, 50, 0, Math.PI*2); ctx.fill();
+
+            topperParticles.forEach(p => { p.update(); p.draw(ctx, centerX, centerY); });
+
+            ctx.globalCompositeOperation = 'source-over'; 
+            snowParticles.forEach(p => { if (p.z <= 0) { p.update(); p.draw(ctx, centerX, centerY); }});
+        }
+
+        init();
+        animate();
+
+    </script>
+</body>
+</html>
